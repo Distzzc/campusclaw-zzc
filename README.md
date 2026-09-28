@@ -31,11 +31,13 @@ cp .env.example .env
 docker compose up --build
 ```
 
-健康检查：
+Nginx 反向代理会对外暴露 `APP_PORT`，Flask/Gunicorn 只在 Compose 内部网络监听。健康检查：
 
 ```bash
-curl http://localhost:5000/health
+curl http://localhost:5001/health
 ```
+
+打开 `http://localhost:5001` 进入正式登录页。登录后会进入课堂工作台：教师可以上传材料，学生以只读方式查看本班材料。页面会自动适配桌面和移动视口，并提供加载、空状态、上传成功和错误反馈。
 
 应用通过 `/api/materials` 提供材料列表和教师上传接口；服务端依据认证会话中的班级过滤数据，客户端传入的班级标识不参与授权。
 

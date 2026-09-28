@@ -1,17 +1,18 @@
 import os
-import secrets
 import sqlite3
+import mimetypes
 from functools import wraps
 from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from flask import Flask, abort, g, jsonify, redirect, render_template_string, request, session, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATABASE = BASE_DIR / "data" / "app.db"
 DEFAULT_STORAGE = BASE_DIR / "data" / "materials"
 PASSWORD_HASHER = PasswordHasher()
+mimetypes.add_type("text/markdown", ".md")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS classes (
@@ -36,33 +37,6 @@ CREATE TABLE IF NOT EXISTS materials (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
-
-LOGIN_PAGE = """<!doctype html>
-<title>登录</title>
-<h1>登录</h1>
-<form method="post">
-  <label>账号 <input name="username" required></label>
-  <label>密码 <input name="password" type="password" required></label>
-  <button type="submit">登录</button>
-</form>
-{% if error %}<p>{{ error }}</p>{% endif %}
-"""
-
-MATERIALS_PAGE = """<!doctype html>
-<title>班级材料</title>
-<h1>班级材料</h1>
-<p>当前用户：{{ user.username }}（{{ user.role }}，{{ user.class_name }}）</p>
-{% if user.role == 'teacher' %}
-<form method="post" action="{{ url_for('create_material') }}" enctype="multipart/form-data">
-  <input name="title" placeholder="材料标题" required>
-  <input name="file" type="file" required>
-  <button type="submit">上传</button>
-</form>
-{% endif %}
-<ul>{% for material in materials %}<li>{{ material.title }} - {{ material.filename }}</li>{% endfor %}</ul>
-<form method="post" action="{{ url_for('logout') }}"><button>退出</button></form>
-"""
-
 
 def create_app(test_config=None):
     app = Flask(__name__)
@@ -114,6 +88,10 @@ def create_app(test_config=None):
     def health():
         return jsonify(status="ok")
 
+    @app.get("/")
+    def home():
+        return redirect(url_for("login"))
+
     @app.route("/login", methods=("GET", "POST"))
     def login():
         error = None
@@ -132,7 +110,7 @@ def create_app(test_config=None):
                     session.clear()
                     session["user_id"] = user["id"]
                     return redirect(url_for("materials_page"))
-        return render_template_string(LOGIN_PAGE, error=error)
+        return render_template("login.html", error=error)
 
     @app.post("/logout")
     def logout():
@@ -142,8 +120,7 @@ def create_app(test_config=None):
     @app.get("/materials")
     @login_required(page=True)
     def materials_page():
-        materials = list_materials()
-        return render_template_string(MATERIALS_PAGE, user=g.user, materials=materials)
+        return render_template("dashboard.html", user=g.user)
 
     @app.get("/api/me")
     @login_required()
@@ -211,6 +188,47 @@ def create_app(test_config=None):
         if material is None:
             abort(403)
         return jsonify(material=material_payload(material))
+
+    @app.get("/api/materials/<int:material_id>/download")
+    @login_required()
+    def download_material(material_id):
+        material = get_db().execute(
+            "SELECT * FROM materials WHERE id = ? AND class_id = ? AND index_status = 'indexed'",
+            (material_id, g.user["class_id"]),
+        ).fetchone()
+        if material is None:
+            abort(403)
+
+        storage_root = Path(current_app().config["STORAGE_PATH"]).resolve()
+        target = Path(material["storage_path"]).resolve(strict=False)
+        try:
+            target.relative_to(storage_root)
+        except ValueError:
+            abort(403)
+        if not target.is_file():
+            abort(404)
+
+        download_name = Path(material["filename"] or "material.bin").name
+        mimetype = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+        return send_file(target, as_attachment=True, download_name=download_name, mimetype=mimetype)
+
+    @app.errorhandler(400)
+    def bad_request(_error):
+        if request.path.startswith("/api/"):
+            return jsonify(error="请求参数无效"), 400
+        return render_template("error.html", code=400, message="请求参数无效，请检查后重试。"), 400
+
+    @app.errorhandler(403)
+    def forbidden(_error):
+        if request.path.startswith("/api/"):
+            return jsonify(error="forbidden"), 403
+        return render_template("error.html", code=403, message="你没有权限访问这个内容。"), 403
+
+    @app.errorhandler(404)
+    def not_found(_error):
+        if request.path.startswith("/api/"):
+            return jsonify(error="not found"), 404
+        return render_template("error.html", code=404, message="页面不存在或已经移动。"), 404
 
     with app.app_context():
         init_db()

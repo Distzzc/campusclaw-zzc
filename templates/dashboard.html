@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ user.class_name }}材料 | CampusClaw{% endblock %}
+{% block content %}
+<div class="app-layout" data-dashboard data-role="{{ user.role }}">
+  <header class="topbar">
+    <a class="wordmark" href="{{ url_for('materials_page') }}"><span>CC</span> CampusClaw</a>
+    <div class="topbar-actions">
+      <div class="identity-chip">
+        <span class="avatar">{{ user.username[0]|upper }}</span>
+        <span><strong>{{ user.username }}</strong><small>{{ '教师' if user.role == 'teacher' else '学生' }} · {{ user.class_name }}</small></span>
+      </div>
+      <form method="post" action="{{ url_for('logout') }}"><button class="button button-ghost" type="submit">退出</button></form>
+    </div>
+  </header>
+
+  <div class="dashboard-grid">
+    <aside class="side-panel">
+      <p class="eyebrow">YOUR CLASSROOM</p>
+      <h1>{{ user.class_name }}</h1>
+      <p class="side-copy">这里是你的课堂材料空间。内容只对本班成员开放。</p>
+      <div class="side-status"><span class="status-dot"></span>空间已连接</div>
+    </aside>
+
+    <section class="content-panel" aria-labelledby="page-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">KNOWLEDGE BASE</p>
+          <h2 id="page-heading">班级材料</h2>
+        </div>
+        <span class="count-badge" data-material-count>加载中</span>
+      </div>
+
+      <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
+
+      {% if user.role == 'teacher' %}
+      <section class="upload-panel" aria-labelledby="upload-heading">
+        <div>
+          <p class="eyebrow">TEACHER TOOL</p>
+          <h3 id="upload-heading">添加一份材料</h3>
+          <p class="muted">上传后，材料会进入 {{ user.class_name }} 的知识库。</p>
+        </div>
+        <form class="upload-form" data-upload-form enctype="multipart/form-data">
+          <div class="field">
+            <label for="material-title">材料标题</label>
+            <input id="material-title" name="title" placeholder="例如：第三周阅读材料" required>
+          </div>
+          <div class="field file-field">
+            <label for="material-file">选择文件</label>
+            <input id="material-file" name="file" type="file" required>
+          </div>
+          <button class="button button-primary" type="submit" data-upload-button>上传到知识库</button>
+        </form>
+      </section>
+      {% else %}
+      <section class="student-note">
+        <span class="note-icon" aria-hidden="true">↗</span>
+        <div><strong>只读课堂空间</strong><p>你可以查看本班材料。上传权限仅开放给教师。</p></div>
+      </section>
+      {% endif %}
+
+      <section class="materials-section" aria-labelledby="list-heading">
+        <div class="list-heading"><h3 id="list-heading">最近材料</h3><button class="button button-small button-ghost" type="button" data-refresh>刷新列表</button></div>
+        <div class="material-list" data-material-list aria-live="polite">
+          <div class="loading-state"><span class="spinner"></span>正在加载本班材料</div>
+        </div>
+      </section>
+    </section>
+  </div>
+</div>
+{% endblock %}

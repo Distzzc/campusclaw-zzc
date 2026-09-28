@@ -33,7 +33,7 @@
 
 ## 6. Compose 集成与安全验收
 
-- [ ] 6.1 使用 Docker Compose 启动 Flask、SQLite 持久化卷和材料存储，执行迁移、预置数据和最小登录/上传/列表 smoke test；verify：容器可重复启动，`GET /health` 成功
+- [x] 6.1 使用 Docker Compose 启动 Flask、SQLite 持久化卷和材料存储，执行迁移、预置数据和最小登录/上传/列表 smoke test；verify：容器可重复启动，`GET /health` 成功
 - [x] 6.2 执行认证、角色拒绝、学生上传 403、跨班隔离、密码哈希、密钥来源和错误响应的完整测试套件；verify：测试覆盖 spec 中的关键成功与拒绝场景
 - [x] 6.3 补充部署与安全运维文档，说明环境变量、生产密钥注入、HTTPS/cookie/CSRF、迁移和回滚步骤，并确认无真实密钥；verify：文档审查通过
 - [x] 6.4 执行 OpenSpec 严格校验；verify：运行 `openspec validate "auth-rbac-class-material-isolation" --type change --strict` 返回变更有效

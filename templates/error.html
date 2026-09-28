@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} | CampusClaw{% endblock %}
+{% block content %}
+<section class="error-page">
+  <p class="eyebrow">CAMPUSCLAW / {{ code }}</p>
+  <h1>{{ code }}</h1>
+  <p>{{ message }}</p>
+  <a class="button button-primary" href="{{ url_for('home') }}">回到登录页</a>
+</section>
+{% endblock %}

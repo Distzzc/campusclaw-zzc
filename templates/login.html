@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}登录 | CampusClaw{% endblock %}
+{% block content %}
+<section class="auth-layout">
+  <div class="auth-intro">
+    <div class="brand-lockup">
+      <p class="brand-kicker">CLASSROOM KNOWLEDGE SPACE</p>
+      <h1>CampusClaw</h1>
+      <p class="brand-description">A clear, shared home for every classroom.</p>
+      <div class="brand-points" aria-label="CampusClaw features">
+        <span>Learn</span>
+        <span>Share</span>
+        <span>Grow</span>
+      </div>
+    </div>
+  </div>
+  <div class="auth-card">
+    <div class="brand-mark" aria-hidden="true">CC</div>
+    <p class="eyebrow">WELCOME BACK</p>
+    <h2>登录课堂空间</h2>
+    <p class="muted">使用你的校园账号继续。</p>
+    <form method="post" class="stack-form" data-login-form>
+      <div class="field">
+        <label for="username">账号</label>
+        <input id="username" name="username" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      {% if error %}<p class="form-message error" role="alert">{{ error }}</p>{% endif %}
+      <button class="button button-primary button-wide" type="submit" data-submit-button>进入课堂</button>
+    </form>
+    <p class="form-hint">账号由课堂管理员提供。</p>
+  </div>
+</section>
+{% endblock %}
