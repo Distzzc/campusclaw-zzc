@@ -1,17 +1,21 @@
 import os
 import sqlite3
 import mimetypes
+import hashlib
+import secrets
+import time
 from functools import wraps
 from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATABASE = BASE_DIR / "data" / "app.db"
 DEFAULT_STORAGE = BASE_DIR / "data" / "materials"
 PASSWORD_HASHER = PasswordHasher()
+ACCESS_TOKEN_TTL_SECONDS = 3600
 mimetypes.add_type("text/markdown", ".md")
 
 SCHEMA = """
@@ -36,6 +40,15 @@ CREATE TABLE IF NOT EXISTS materials (
     index_status TEXT NOT NULL CHECK (index_status IN ('pending', 'indexed', 'failed')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS access_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_access_tokens_user_id ON access_tokens(user_id);
 """
 
 def create_app(test_config=None):
@@ -45,10 +58,6 @@ def create_app(test_config=None):
         DATABASE=os.environ.get("DATABASE_PATH", str(DEFAULT_DATABASE)),
         STORAGE_PATH=os.environ.get("STORAGE_PATH", str(DEFAULT_STORAGE)),
         TESTING=False,
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="Lax",
-        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
-        PERMANENT_SESSION_LIFETIME=3600,
     )
     if test_config:
         app.config.update(test_config)
@@ -64,13 +73,22 @@ def create_app(test_config=None):
     @app.before_request
     def load_user():
         g.user = None
-        user_id = session.get("user_id")
-        if user_id:
-            g.user = get_db().execute(
-                "SELECT users.*, classes.name AS class_name FROM users "
-                "JOIN classes ON classes.id = users.class_id WHERE users.id = ?",
-                (user_id,),
+        g.access_token_id = None
+        token = bearer_token_from_request()
+        if token:
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            now = int(time.time())
+            row = get_db().execute(
+                "SELECT access_tokens.id AS token_id, users.*, classes.name AS class_name "
+                "FROM access_tokens JOIN users ON users.id = access_tokens.user_id "
+                "JOIN classes ON classes.id = users.class_id "
+                "WHERE access_tokens.token_hash = ? AND access_tokens.revoked_at IS NULL "
+                "AND access_tokens.expires_at > ?",
+                (token_hash, now),
             ).fetchone()
+            if row is not None:
+                g.access_token_id = row["token_id"]
+                g.user = row
 
     @app.teardown_appcontext
     def close_db(_error=None):
@@ -92,35 +110,56 @@ def create_app(test_config=None):
     def home():
         return redirect(url_for("login"))
 
-    @app.route("/login", methods=("GET", "POST"))
+    @app.get("/login")
     def login():
-        error = None
-        if request.method == "POST":
-            username = request.form.get("username", "").strip()
-            password = request.form.get("password", "")
-            user = get_db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-            if user is None:
-                error = "账号或密码错误"
-            else:
-                try:
-                    PASSWORD_HASHER.verify(user["password_hash"], password)
-                except VerifyMismatchError:
-                    error = "账号或密码错误"
-                else:
-                    session.clear()
-                    session["user_id"] = user["id"]
-                    return redirect(url_for("materials_page"))
-        return render_template("login.html", error=error)
+        return render_template("login.html")
 
-    @app.post("/logout")
-    def logout():
-        session.clear()
-        return redirect(url_for("login"))
+    @app.post("/api/auth/login")
+    def token_login():
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+        user = get_db().execute(
+            "SELECT users.*, classes.name AS class_name FROM users "
+            "JOIN classes ON classes.id = users.class_id WHERE users.username = ?",
+            (username,),
+        ).fetchone()
+        if user is None:
+            return jsonify(error="账号或密码错误"), 401
+        try:
+            PASSWORD_HASHER.verify(user["password_hash"], password)
+        except VerifyMismatchError:
+            return jsonify(error="账号或密码错误"), 401
+
+        access_token = secrets.token_urlsafe(32)
+        now = int(time.time())
+        get_db().execute(
+            "INSERT INTO access_tokens (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (user["id"], hashlib.sha256(access_token.encode("utf-8")).hexdigest(), now, now + ACCESS_TOKEN_TTL_SECONDS),
+        )
+        get_db().commit()
+        return jsonify(
+            access_token=access_token,
+            token_type="Bearer",
+            expires_in=ACCESS_TOKEN_TTL_SECONDS,
+            user=user_payload(user),
+        )
+
+    @app.post("/api/auth/logout")
+    @login_required()
+    def token_logout():
+        get_db().execute(
+            "UPDATE access_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (int(time.time()), g.access_token_id),
+        )
+        get_db().commit()
+        return jsonify(status="ok")
 
     @app.get("/materials")
-    @login_required(page=True)
     def materials_page():
-        return render_template("dashboard.html", user=g.user)
+        return render_template("dashboard.html")
 
     @app.get("/api/me")
     @login_required()
@@ -137,8 +176,6 @@ def create_app(test_config=None):
     def create_material_api():
         return create_material(as_json=True)
 
-    @app.post("/materials")
-    @login_required(role="teacher", page=True)
     def create_material(as_json=False):
         file = request.files.get("file")
         title = request.form.get("title", "").strip()
@@ -290,16 +327,29 @@ def material_payload(row):
 
 
 def user_payload(user):
-    return {"id": user["id"], "username": user["username"], "role": user["role"], "class_id": user["class_id"]}
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "class_id": user["class_id"],
+        "class_name": user["class_name"],
+    }
 
 
-def login_required(role=None, page=False):
+def bearer_token_from_request():
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+
+def login_required(role=None):
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
             if g.user is None:
-                if page:
-                    return redirect(url_for("login"))
                 return jsonify(error="authentication required"), 401
             if role and g.user["role"] != role:
                 return jsonify(error="forbidden"), 403

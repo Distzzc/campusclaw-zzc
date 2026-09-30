@@ -11,10 +11,14 @@
   };
 
   const api = async (path, options = {}) => {
-    const response = await fetch(path, { credentials: 'same-origin', ...options });
+    const headers = new Headers(options.headers || {});
+    const token = sessionStorage.getItem('access_token');
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const response = await fetch(path, { credentials: 'omit', ...options, headers });
     let payload = {};
     try { payload = await response.json(); } catch (_) { /* non-JSON response */ }
     if (response.status === 401) {
+      sessionStorage.removeItem('access_token');
       window.location.href = '/login';
       throw new Error('登录状态已过期');
     }
@@ -62,8 +66,12 @@
     button.disabled = true;
     button.textContent = '准备下载…';
     try {
-      const response = await fetch(`/api/materials/${encodeURIComponent(materialId)}/download`, { credentials: 'same-origin' });
+      const response = await fetch(`/api/materials/${encodeURIComponent(materialId)}/download`, {
+        credentials: 'omit',
+        headers: { Authorization: `Bearer ${sessionStorage.getItem('access_token') || ''}` },
+      });
       if (response.status === 401) {
+        sessionStorage.removeItem('access_token');
         window.location.href = '/login';
         return;
       }
@@ -96,26 +104,63 @@
   const setupLoginForm = () => {
     const form = document.querySelector('[data-login-form]');
     if (!form) return;
-    form.addEventListener('submit', () => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
       const button = form.querySelector('[data-submit-button]');
+      const errorMessage = form.querySelector('[data-login-error]');
       if (button) { button.disabled = true; button.textContent = '正在进入…'; }
+      if (errorMessage) { errorMessage.hidden = true; errorMessage.textContent = ''; }
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.fromEntries(new FormData(form))),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || '登录失败，请检查账号和密码');
+        sessionStorage.setItem('access_token', payload.access_token);
+        window.location.href = '/materials';
+      } catch (error) {
+        if (errorMessage) {
+          errorMessage.textContent = error.message || '无法连接服务，请稍后重试';
+          errorMessage.hidden = false;
+        }
+      } finally {
+        if (button) { button.disabled = false; button.textContent = '进入课堂'; }
+      }
     });
   };
 
   const setupDashboard = async () => {
     if (!dashboard) return;
+    if (!sessionStorage.getItem('access_token')) {
+      window.location.replace('/login');
+      return;
+    }
     try {
       state.user = (await api('/api/me')).user;
     } catch (error) {
       if (error.message !== '登录状态已过期') showNotice(error.message, 'error');
       return;
     }
+    dashboard.hidden = false;
+    dashboard.dataset.role = state.user.role;
+    document.querySelector('[data-user-name]').textContent = state.user.username;
+    document.querySelector('[data-user-avatar]').textContent = state.user.username.slice(0, 1).toUpperCase();
+    document.querySelector('[data-user-role]').textContent = state.user.role === 'teacher' ? '教师' : '学生';
+    document.querySelector('[data-class-name]').textContent = state.user.class_name;
+    document.querySelector('[data-class-heading]').textContent = state.user.class_name;
+    document.querySelector('[data-teacher-only]').hidden = state.user.role !== 'teacher';
+    document.querySelector('[data-student-only]').hidden = state.user.role !== 'student';
+    document.querySelector('[data-student-only]').style.display = state.user.role === 'student' ? 'flex' : 'none';
     await loadMaterials();
 
     document.addEventListener('click', (event) => {
       if (event.target.closest('[data-refresh]')) loadMaterials();
       const downloadButton = event.target.closest('[data-download-id]');
       if (downloadButton) downloadMaterial(downloadButton.dataset.downloadId, downloadButton);
+      if (event.target.closest('[data-logout]')) logout();
     });
 
     const form = document.querySelector('[data-upload-form]');
@@ -141,6 +186,17 @@
         button.textContent = '上传到知识库';
       }
     });
+  };
+
+  const logout = async () => {
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+    } catch (_) {
+      // Clear the browser credential even if revocation cannot be reached.
+    } finally {
+      sessionStorage.removeItem('access_token');
+      window.location.href = '/login';
+    }
   };
 
   setupLoginForm();

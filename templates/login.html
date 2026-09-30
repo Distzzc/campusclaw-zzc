@@ -19,7 +19,7 @@
     <p class="eyebrow">WELCOME BACK</p>
     <h2>登录课堂空间</h2>
     <p class="muted">使用你的校园账号继续。</p>
-    <form method="post" class="stack-form" data-login-form>
+    <form class="stack-form" data-login-form>
       <div class="field">
         <label for="username">账号</label>
         <input id="username" name="username" autocomplete="username" required autofocus>
@@ -28,7 +28,7 @@
         <label for="password">密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
       </div>
-      {% if error %}<p class="form-message error" role="alert">{{ error }}</p>{% endif %}
+      <p class="form-message error" data-login-error role="alert" hidden></p>
       <button class="button button-primary button-wide" type="submit" data-submit-button>进入课堂</button>
     </form>
     <p class="form-hint">账号由课堂管理员提供。</p>

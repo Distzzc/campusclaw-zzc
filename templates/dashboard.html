@@ -1,22 +1,22 @@
 {% extends "base.html" %}
-{% block title %}{{ user.class_name }}材料 | CampusClaw{% endblock %}
+{% block title %}课堂材料 | CampusClaw{% endblock %}
 {% block content %}
-<div class="app-layout" data-dashboard data-role="{{ user.role }}">
+<div class="app-layout" data-dashboard hidden>
   <header class="topbar">
     <a class="wordmark" href="{{ url_for('materials_page') }}"><span>CC</span> CampusClaw</a>
     <div class="topbar-actions">
       <div class="identity-chip">
-        <span class="avatar">{{ user.username[0]|upper }}</span>
-        <span><strong>{{ user.username }}</strong><small>{{ '教师' if user.role == 'teacher' else '学生' }} · {{ user.class_name }}</small></span>
+        <span class="avatar" data-user-avatar></span>
+        <span><strong data-user-name></strong><small><span data-user-role></span> · <span data-class-name></span></small></span>
       </div>
-      <form method="post" action="{{ url_for('logout') }}"><button class="button button-ghost" type="submit">退出</button></form>
+      <button class="button button-ghost" type="button" data-logout>退出</button>
     </div>
   </header>
 
   <div class="dashboard-grid">
     <aside class="side-panel">
       <p class="eyebrow">YOUR CLASSROOM</p>
-      <h1>{{ user.class_name }}</h1>
+      <h1 data-class-heading></h1>
       <p class="side-copy">这里是你的课堂材料空间。内容只对本班成员开放。</p>
       <div class="side-status"><span class="status-dot"></span>空间已连接</div>
     </aside>
@@ -32,12 +32,11 @@
 
       <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
 
-      {% if user.role == 'teacher' %}
-      <section class="upload-panel" aria-labelledby="upload-heading">
+      <section class="upload-panel" aria-labelledby="upload-heading" data-teacher-only hidden>
         <div>
           <p class="eyebrow">TEACHER TOOL</p>
           <h3 id="upload-heading">添加一份材料</h3>
-          <p class="muted">上传后，材料会进入 {{ user.class_name }} 的知识库。</p>
+          <p class="muted">上传后，材料会进入你的班级知识库。</p>
         </div>
         <form class="upload-form" data-upload-form enctype="multipart/form-data">
           <div class="field">
@@ -51,12 +50,10 @@
           <button class="button button-primary" type="submit" data-upload-button>上传到知识库</button>
         </form>
       </section>
-      {% else %}
-      <section class="student-note">
+      <section class="student-note" data-student-only hidden>
         <span class="note-icon" aria-hidden="true">↗</span>
         <div><strong>只读课堂空间</strong><p>你可以查看本班材料。上传权限仅开放给教师。</p></div>
       </section>
-      {% endif %}
 
       <section class="materials-section" aria-labelledby="list-heading">
         <div class="list-heading"><h3 id="list-heading">最近材料</h3><button class="button button-small button-ghost" type="button" data-refresh>刷新列表</button></div>

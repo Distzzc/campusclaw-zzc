@@ -1,12 +1,13 @@
 import io
 import os
 import sqlite3
+import hashlib
 
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import pytest
 
-from app import create_app, seed_data
+from app import create_app, init_db, seed_data
 
 
 @pytest.fixture()
@@ -20,7 +21,17 @@ def client(tmp_path):
 
 
 def login(client, username, password):
-    return client.post("/login", data={"username": username, "password": password})
+    client.environ_base.pop("HTTP_AUTHORIZATION", None)
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
+    if response.status_code == 200:
+        client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {response.json['access_token']}"
+    return response
+
+
+def logout(client):
+    response = client.post("/api/auth/logout")
+    client.environ_base.pop("HTTP_AUTHORIZATION", None)
+    return response
 
 
 def test_health_is_public(client):
@@ -40,31 +51,39 @@ def test_pages_load_templates_and_assets(client):
 
 
 def test_dashboard_differs_by_role(client):
-    login(client, "a_teacher", "a-teacher-password")
+    teacher_login = login(client, "a_teacher", "a-teacher-password")
+    assert teacher_login.status_code == 200
     teacher_page = client.get("/materials")
     assert teacher_page.status_code == 200
     assert b"data-upload-form" in teacher_page.data
+    assert b"a_teacher" not in teacher_page.data
+    assert b"A\xe7\x8f\xad" not in teacher_page.data
 
-    client.post("/logout")
+    logout(client)
     login(client, "a_student", "a-student-password")
     student_page = client.get("/materials")
     assert student_page.status_code == 200
-    assert b"data-upload-form" not in student_page.data
+    assert b"data-teacher-only" in student_page.data
     assert "只读课堂空间".encode() in student_page.data
 
 
 def test_material_page_includes_download_client_without_server_paths(client):
     page = client.get("/materials")
-    assert page.status_code == 302
+    assert page.status_code == 200
+    assert b"a_teacher" not in page.data
     script = client.get("/static/js/app.js")
     assert b"data-download-id" in script.data
     assert b"/api/materials/" in script.data
+    assert b"Authorization" in script.data
     assert b"storage_path" not in script.data
 
 
 def test_login_returns_role_and_class(client):
     response = login(client, "a_teacher", "a-teacher-password")
-    assert response.status_code == 302
+    assert response.status_code == 200
+    assert response.json["token_type"] == "Bearer"
+    assert response.json["expires_in"] == 3600
+    assert "password" not in response.json
     me = client.get("/api/me")
     assert me.status_code == 200
     assert me.json["user"]["role"] == "teacher"
@@ -73,12 +92,12 @@ def test_login_returns_role_and_class(client):
 
 def test_invalid_login_does_not_authenticate(client):
     response = login(client, "a_teacher", "wrong")
-    assert response.status_code == 200
+    assert response.status_code == 401
     assert client.get("/api/me").status_code == 401
 
 
-def test_protected_page_redirects_and_api_returns_401(client):
-    assert client.get("/materials").status_code == 302
+def test_dashboard_shell_is_public_and_api_returns_401(client):
+    assert client.get("/materials").status_code == 200
     assert client.get("/api/materials").status_code == 401
 
 
@@ -103,7 +122,7 @@ def test_teacher_upload_appears_only_in_own_class(client):
     material_id = response.json["material"]["id"]
     assert client.get("/api/materials").json["materials"][0]["title"] == "A班材料"
 
-    client.post("/logout")
+    logout(client)
     login(client, "b_student", "b-student-password")
     assert client.get("/api/materials").json["materials"] == []
     assert client.get(f"/api/materials/{material_id}").status_code == 403
@@ -117,6 +136,62 @@ def test_password_is_hashed_and_seed_is_idempotent(client, tmp_path):
         connection.close()
     assert stored != "a-teacher-password"
     assert stored.startswith("$argon2")
+
+
+def test_token_is_only_stored_as_hash_and_schema_init_is_idempotent(client):
+    token_response = login(client, "a_teacher", "a-teacher-password")
+    token = token_response.json["access_token"]
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with client.application.app_context():
+        init_db()
+        init_db()
+        row = sqlite3.connect(client.application.config["DATABASE"]).execute(
+            "SELECT token_hash, expires_at, revoked_at FROM access_tokens"
+        ).fetchone()
+    assert row[0] == token_hash
+    assert row[0] != token
+    assert row[1] > 0
+    assert row[2] is None
+
+
+def test_missing_malformed_and_unknown_bearer_tokens_are_rejected(client):
+    assert client.get("/api/me").status_code == 401
+    for authorization in ("Bearer", "Basic abc", "Bearer invalid-token"):
+        response = client.get("/api/me", headers={"Authorization": authorization})
+        assert response.status_code == 401
+
+
+def test_cookie_session_does_not_authenticate_api(client):
+    with client.session_transaction() as flask_session:
+        flask_session["user_id"] = 1
+    assert client.get("/api/me").status_code == 401
+
+
+def test_expired_token_is_rejected(client):
+    response = login(client, "a_teacher", "a-teacher-password")
+    token = response.json["access_token"]
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with client.application.app_context():
+        database = sqlite3.connect(client.application.config["DATABASE"])
+        database.execute("UPDATE access_tokens SET expires_at = 1 WHERE token_hash = ?", (token_hash,))
+        database.commit()
+        database.close()
+    assert client.get("/api/me").status_code == 401
+
+
+def test_logout_immediately_revokes_token(client):
+    response = login(client, "a_teacher", "a-teacher-password")
+    token = response.json["access_token"]
+    assert logout(client).status_code == 200
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+    assert client.get("/api/me").status_code == 401
+
+
+def test_invalid_credentials_have_same_response(client):
+    unknown_user = client.post("/api/auth/login", json={"username": "missing", "password": "x"})
+    wrong_password = client.post("/api/auth/login", json={"username": "a_teacher", "password": "wrong"})
+    assert unknown_user.status_code == wrong_password.status_code == 401
+    assert unknown_user.json == wrong_password.json == {"error": "账号或密码错误"}
 
 
 def create_material(client, title="下载材料", filename="lesson.txt", content=b"lesson content"):
@@ -143,7 +218,7 @@ def test_teacher_and_student_can_download_same_class_material(client):
     assert "filename*=UTF-8''%E8%AF%BE%E7%A8%8B%E6%9D%90%E6%96%99.md" in response.headers["Content-Disposition"]
     assert response.content_type.startswith("text/markdown")
 
-    client.post("/logout")
+    logout(client)
     login(client, "a_student", "a-student-password")
     response = client.get(f"/api/materials/{material_id}/download")
     assert response.status_code == 200
@@ -153,7 +228,7 @@ def test_teacher_and_student_can_download_same_class_material(client):
 def test_cross_class_download_is_forbidden(client):
     login(client, "a_teacher", "a-teacher-password")
     material_id = create_material(client)
-    client.post("/logout")
+    logout(client)
     login(client, "b_student", "b-student-password")
     response = client.get(f"/api/materials/{material_id}/download?class_id=1&storage_path=/etc/passwd")
     assert response.status_code == 403
