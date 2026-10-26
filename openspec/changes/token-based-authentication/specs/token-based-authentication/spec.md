@@ -5,25 +5,25 @@
 ## ADDED Requirements
 
 ### Requirement: 用户可以通过账号密码获取访问令牌
-系统 SHALL 提供登录 API，接受账号和密码，并在凭据有效时返回不透明访问令牌、令牌类型、有效时长及非敏感用户信息。系统 MUST 对无效账号和错误密码返回一致的认证失败结果，且 MUST NOT 返回或持久化明文密码或完整访问令牌。
+系统 SHALL 提供登录 API，接受账号和密码，并在凭据有效时返回由服务端签名的 JWT 访问令牌、令牌类型、有效时长及非敏感用户信息。JWT MUST 包含用户标识、唯一令牌 ID、签发时间、过期时间和固定签发者。系统 MUST 对无效账号和错误密码返回一致的认证失败结果，且 MUST NOT 持久化明文密码或完整访问令牌。
 
 #### Scenario: 有效凭据签发令牌
 - **WHEN** 用户向登录 API 提交有效账号和密码
-- **THEN** 系统返回可用于 Bearer 认证的访问令牌、有效时长和用户信息，且不返回密码
+- **THEN** 系统返回可用于 Bearer 认证且可通过服务端签名验证的 JWT、有效时长和用户信息，且不返回密码
 
 #### Scenario: 无效凭据不签发令牌
 - **WHEN** 用户提交不存在的账号或错误密码
 - **THEN** 系统以一致的认证失败响应拒绝请求，且不创建有效令牌
 
 ### Requirement: 受保护 API 仅接受有效 Bearer 令牌
-系统 SHALL 要求受保护 API 请求通过 `Authorization: Bearer <token>` 提交有效令牌。系统 MUST 从服务端记录解析用户身份、角色和班级范围，不得信任客户端自行提供的身份或授权范围；Cookie Session 不得作为受保护 API 的认证凭证。
+系统 SHALL 要求受保护 API 请求通过 `Authorization: Bearer <token>` 提交有效 JWT。系统 MUST 验证 JWT 签名、固定允许的签名算法、签发者和有效期，并从服务端记录确认令牌仍有效及解析当前用户身份、角色和班级范围；不得信任客户端自行提供的角色或授权范围。Cookie Session 不得作为受保护 API 的认证凭证。
 
 #### Scenario: 有效 Bearer 令牌访问 API
-- **WHEN** 请求在 Authorization 头中携带有效 Bearer 令牌
+- **WHEN** 请求在 Authorization 头中携带签名有效、未过期、未撤销且签发者正确的 Bearer JWT
 - **THEN** 系统以该令牌关联的用户身份处理请求，并继续执行现有角色授权和班级隔离检查
 
 #### Scenario: 缺少或无效令牌访问 API
-- **WHEN** 受保护 API 请求缺少 Bearer 令牌、令牌格式错误或令牌无效
+- **WHEN** 受保护 API 请求缺少 Bearer 令牌，或 JWT 格式错误、签名/算法/签发者无效、过期、未知或已撤销
 - **THEN** 系统返回 HTTP 401，且不返回受保护数据
 
 #### Scenario: 仅有旧 Cookie 不构成认证

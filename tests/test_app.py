@@ -2,8 +2,13 @@ import io
 import os
 import sqlite3
 import hashlib
+import time
 
-os.environ.setdefault("SECRET_KEY", "test-secret")
+import jwt
+
+TEST_SECRET_KEY = "test-secret-key-for-hs256-tests-32bytes"
+TEST_HS384_KEY = "test-secret-key-for-hs384-tests-at-least-48-bytes-long"
+os.environ.setdefault("SECRET_KEY", TEST_SECRET_KEY)
 
 import pytest
 
@@ -14,7 +19,12 @@ from app import create_app, init_db, seed_data
 def client(tmp_path):
     database = tmp_path / "test.db"
     storage = tmp_path / "materials"
-    app = create_app({"TESTING": True, "DATABASE": str(database), "STORAGE_PATH": str(storage)})
+    app = create_app({
+        "TESTING": True,
+        "SECRET_KEY": TEST_SECRET_KEY,
+        "DATABASE": str(database),
+        "STORAGE_PATH": str(storage),
+    })
     with app.app_context():
         seed_data()
     return app.test_client()
@@ -48,6 +58,19 @@ def test_pages_load_templates_and_assets(client):
     assert b"/static/js/app.js" in login_page.data
     assert client.get("/static/css/app.css").status_code == 200
     assert client.get("/static/js/app.js").status_code == 200
+
+
+def test_swagger_ui_and_openapi_document_are_public(client):
+    page = client.get("/api/docs")
+    assert page.status_code == 200
+    assert b"SwaggerUIBundle" in page.data
+    assert b"tryItOutEnabled: true" in page.data
+    assert b"/static/openapi.yaml" in page.data
+    spec = client.get("/static/openapi.yaml")
+    assert spec.status_code == 200
+    assert spec.mimetype in ("application/yaml", "text/yaml", "application/octet-stream")
+    assert b"openapi: 3.0.3" in spec.data
+    assert b"/api/tutoring/sessions/{session_id}/messages" in spec.data
 
 
 def test_dashboard_differs_by_role(client):
@@ -84,6 +107,10 @@ def test_login_returns_role_and_class(client):
     assert response.json["token_type"] == "Bearer"
     assert response.json["expires_in"] == 3600
     assert "password" not in response.json
+    claims = jwt.decode(response.json["access_token"], TEST_SECRET_KEY, algorithms=["HS256"], issuer="campusclaw")
+    assert claims["sub"] == str(response.json["user"]["id"])
+    assert claims["jti"]
+    assert claims["exp"] - claims["iat"] == 3600
     me = client.get("/api/me")
     assert me.status_code == 200
     assert me.json["user"]["role"] == "teacher"
@@ -159,6 +186,53 @@ def test_missing_malformed_and_unknown_bearer_tokens_are_rejected(client):
     for authorization in ("Bearer", "Basic abc", "Bearer invalid-token"):
         response = client.get("/api/me", headers={"Authorization": authorization})
         assert response.status_code == 401
+
+
+def test_tampered_jwt_is_rejected(client):
+    response = login(client, "a_teacher", "a-teacher-password")
+    token = response.json["access_token"]
+    replacement = "A" if token[-1] != "A" else "B"
+    tampered_token = f"{token[:-1]}{replacement}"
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {tampered_token}"}).status_code == 401
+
+
+def test_jwt_rejects_other_algorithms_and_wrong_issuer(client):
+    now = int(time.time())
+    headers = {"Authorization": "Bearer "}
+    wrong_algorithm = jwt.encode(
+        {"sub": "1", "jti": "wrong-alg", "iat": now, "exp": now + 3600, "iss": "campusclaw"},
+        TEST_HS384_KEY,
+        algorithm="HS384",
+    )
+    headers["Authorization"] = f"Bearer {wrong_algorithm}"
+    assert client.get("/api/me", headers=headers).status_code == 401
+
+    wrong_issuer = jwt.encode(
+        {"sub": "1", "jti": "wrong-issuer", "iat": now, "exp": now + 3600, "iss": "attacker"},
+        TEST_SECRET_KEY,
+        algorithm="HS256",
+    )
+    headers["Authorization"] = f"Bearer {wrong_issuer}"
+    assert client.get("/api/me", headers=headers).status_code == 401
+
+
+def test_expired_jwt_is_rejected_even_if_database_record_exists(client):
+    now = int(time.time())
+    expired_token = jwt.encode(
+        {"sub": "1", "jti": "expired", "iat": now - 7200, "exp": now - 3600, "iss": "campusclaw"},
+        TEST_SECRET_KEY,
+        algorithm="HS256",
+    )
+    token_hash = hashlib.sha256(expired_token.encode("utf-8")).hexdigest()
+    with client.application.app_context():
+        database = sqlite3.connect(client.application.config["DATABASE"])
+        database.execute(
+            "INSERT INTO access_tokens (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (1, token_hash, now - 7200, now + 3600),
+        )
+        database.commit()
+        database.close()
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {expired_token}"}).status_code == 401
 
 
 def test_cookie_session_does_not_authenticate_api(client):

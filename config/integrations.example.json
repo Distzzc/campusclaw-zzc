@@ -1,0 +1,28 @@
+{
+  "http_tools": [
+    {
+      "id": "course-search",
+      "name": "外部课程检索",
+      "description": "从学校提供的只读服务检索课程资料。",
+      "read_only": true,
+      "url": "https://tools.example.edu/search",
+      "headers_env": {"Authorization": "COURSE_TOOL_AUTH"},
+      "input_schema": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "maxLength": 1000}},
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "school-library",
+      "name": "学校图书馆 MCP",
+      "transport": "streamable-http",
+      "url": "https://library.example.edu/mcp",
+      "headers_env": {"Authorization": "LIBRARY_MCP_AUTH"},
+      "allowed_tools": ["search_books"]
+    }
+  ]
+}

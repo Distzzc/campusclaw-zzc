@@ -10,12 +10,14 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
+import jwt
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATABASE = BASE_DIR / "data" / "app.db"
 DEFAULT_STORAGE = BASE_DIR / "data" / "materials"
 PASSWORD_HASHER = PasswordHasher()
 ACCESS_TOKEN_TTL_SECONDS = 3600
+JWT_ISSUER = "campusclaw"
 mimetypes.add_type("text/markdown", ".md")
 
 SCHEMA = """
@@ -70,25 +72,38 @@ def create_app(test_config=None):
     Path(app.config["DATABASE"]).parent.mkdir(parents=True, exist_ok=True)
     Path(app.config["STORAGE_PATH"]).mkdir(parents=True, exist_ok=True)
 
+    from knowledge.web import configure
+    configure(app, get_db, login_required)
+
     @app.before_request
     def load_user():
         g.user = None
         g.access_token_id = None
         token = bearer_token_from_request()
         if token:
-            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-            now = int(time.time())
-            row = get_db().execute(
-                "SELECT access_tokens.id AS token_id, users.*, classes.name AS class_name "
-                "FROM access_tokens JOIN users ON users.id = access_tokens.user_id "
-                "JOIN classes ON classes.id = users.class_id "
-                "WHERE access_tokens.token_hash = ? AND access_tokens.revoked_at IS NULL "
-                "AND access_tokens.expires_at > ?",
-                (token_hash, now),
-            ).fetchone()
-            if row is not None:
-                g.access_token_id = row["token_id"]
-                g.user = row
+            try:
+                claims = jwt.decode(
+                    token,
+                    app.config["SECRET_KEY"],
+                    algorithms=["HS256"],
+                    issuer=JWT_ISSUER,
+                    options={"require": ["sub", "jti", "iat", "exp", "iss"]},
+                )
+                token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                now = int(time.time())
+                row = get_db().execute(
+                    "SELECT access_tokens.id AS token_id, users.*, classes.name AS class_name "
+                    "FROM access_tokens JOIN users ON users.id = access_tokens.user_id "
+                    "JOIN classes ON classes.id = users.class_id "
+                    "WHERE access_tokens.token_hash = ? AND access_tokens.revoked_at IS NULL "
+                    "AND access_tokens.expires_at > ? AND users.id = ?",
+                    (token_hash, now, claims["sub"]),
+                ).fetchone()
+                if row is not None:
+                    g.access_token_id = row["token_id"]
+                    g.user = row
+            except jwt.InvalidTokenError:
+                pass
 
     @app.teardown_appcontext
     def close_db(_error=None):
@@ -105,6 +120,11 @@ def create_app(test_config=None):
     @app.get("/health")
     def health():
         return jsonify(status="ok")
+
+    @app.get("/api/docs")
+    def api_docs():
+        """Interactive Swagger UI for the public API contract."""
+        return render_template("swagger.html")
 
     @app.get("/")
     def home():
@@ -133,11 +153,22 @@ def create_app(test_config=None):
         except VerifyMismatchError:
             return jsonify(error="账号或密码错误"), 401
 
-        access_token = secrets.token_urlsafe(32)
         now = int(time.time())
+        expires_at = now + ACCESS_TOKEN_TTL_SECONDS
+        access_token = jwt.encode(
+            {
+                "sub": str(user["id"]),
+                "jti": secrets.token_urlsafe(24),
+                "iat": now,
+                "exp": expires_at,
+                "iss": JWT_ISSUER,
+            },
+            app.config["SECRET_KEY"],
+            algorithm="HS256",
+        )
         get_db().execute(
             "INSERT INTO access_tokens (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (user["id"], hashlib.sha256(access_token.encode("utf-8")).hexdigest(), now, now + ACCESS_TOKEN_TTL_SECONDS),
+            (user["id"], hashlib.sha256(access_token.encode("utf-8")).hexdigest(), now, expires_at),
         )
         get_db().commit()
         return jsonify(
@@ -210,6 +241,8 @@ def create_app(test_config=None):
                 return jsonify(error="material storage failed"), 500
             abort(500)
 
+        if app.config['KNOWLEDGE_ENABLED']:
+            app.extensions['knowledge'].index(db, material_id)
         material = db.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
         if as_json or request.path.startswith("/api/"):
             return jsonify(material=material_payload(material)), 201
@@ -286,8 +319,14 @@ def get_db():
 
 
 def init_db():
+    from knowledge.schema import migrate
+    from knowledge.chat import ensure_chat_schema
     get_db().executescript(SCHEMA)
     get_db().commit()
+    migrate(get_db())
+    ensure_chat_schema(get_db())
+    from integrations.registry import ensure_schema
+    ensure_schema(get_db())
 
 
 def seed_data():
@@ -323,7 +362,8 @@ def list_materials():
 
 
 def material_payload(row):
-    return {"id": row["id"], "title": row["title"], "filename": row["filename"], "class_id": row["class_id"]}
+    return {"id": row["id"], "title": row["title"], "filename": row["filename"], "class_id": row["class_id"],
+            "search_index_status": row["search_index_status"], "search_error": row["search_error"]}
 
 
 def user_payload(user):

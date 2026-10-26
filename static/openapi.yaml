@@ -1,0 +1,828 @@
+openapi: 3.0.3
+info:
+  title: CampusClaw Classroom API
+  version: 1.0.0
+  description: |
+    CampusClaw Flask API。需要认证的接口使用 JWT Bearer Token；角色和班级范围始终由服务端身份确定。
+    Swagger UI 的 Authorize 按钮可输入登录接口返回的 access_token（无需添加 Bearer 前缀）。
+servers:
+  - url: /
+    description: 当前站点（推荐，避免跨域）
+tags:
+  - name: System
+  - name: Authentication
+  - name: User
+  - name: Materials
+  - name: Knowledge
+  - name: Tutoring
+  - name: Integrations
+paths:
+  /api/integrations:
+    get:
+      tags: [Integrations]
+      summary: 教师读取外部工具目录和本班启用状态
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: query
+          name: refresh
+          schema: {type: string, enum: ['1']}
+          description: 重新发现 MCP 工具
+      responses:
+        '200':
+          description: 不含服务地址、程序命令和密钥的工具目录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled_tools: {type: array, items: {type: string}}
+                  tools: {type: array, items: {type: object}}
+                  errors: {type: array, items: {type: object}}
+                  mcp_endpoint: {type: string, nullable: true, example: /mcp}
+                  model_support: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: 工具功能未启用}
+    put:
+      tags: [Integrations]
+      summary: 教师更新本班启用的工具
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled_tools]
+              properties:
+                enabled_tools:
+                  type: array
+                  maxItems: 32
+                  items: {type: string}
+                  example: ['builtin:calculator']
+      responses:
+        '200': {description: 本班工具已保存}
+        '400': {description: 工具列表无效或包含未注册的工具}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/integrations/tools/{tool_id}/call:
+    post:
+      tags: [Integrations]
+      summary: 教师调试本班已启用的只读工具
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: path
+          name: tool_id
+          required: true
+          schema: {type: string, example: 'builtin:calculator'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [arguments]
+              properties:
+                arguments: {type: object, example: {expression: '6*7'}}
+      responses:
+        '200':
+          description: 工具执行结果，以 JSON 字符串返回
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result: {type: string}
+        '400': {description: 工具参数无效、执行失败或超时}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: 学生不能调用，或该工具未对本班启用}
+  /health:
+    get:
+      tags: [System]
+      summary: 服务健康检查
+      security: []
+      responses:
+        '200':
+          description: 服务可用
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: 使用账号密码登录
+      description: 登录成功后返回 Bearer JWT。开发预置账号只用于非生产环境。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 账号或密码错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: 撤销当前访问令牌
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 已撤销
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/me:
+    get:
+      tags: [User]
+      summary: 获取当前认证用户
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 当前用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/materials:
+    get:
+      tags: [Materials]
+      summary: 获取本班材料列表
+      description: 教师和学生可访问；只返回认证用户所属班级材料。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 本班材料
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [materials]
+                properties:
+                  materials:
+                    type: array
+                    items: { $ref: '#/components/schemas/Material' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Materials]
+      summary: 教师上传材料
+      description: multipart/form-data 上传；服务端依据教师当前班级保存并尝试建立知识索引。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [title, file]
+              properties:
+                title: { type: string, minLength: 1, example: 第五周学习材料 }
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: 材料已保存（正文索引状态见 search_index_status）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [material]
+                properties:
+                  material: { $ref: '#/components/schemas/Material' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { description: 上传文件超过请求体大小上限 }
+        '500': { description: 文件存储失败 }
+  /api/materials/{material_id}:
+    parameters:
+      - $ref: '#/components/parameters/MaterialId'
+    get:
+      tags: [Materials]
+      summary: 获取材料信息
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 材料信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  material: { $ref: '#/components/schemas/Material' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/materials/{material_id}/download:
+    parameters:
+      - $ref: '#/components/parameters/MaterialId'
+    get:
+      tags: [Materials]
+      summary: 下载本班材料原文件
+      description: 返回附件；只接受当前用户班级内已保存且文件可用的材料。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 原始文件
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/pdf:
+              schema: { type: string, format: binary }
+            text/plain:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 材料文件不可用 }
+  /api/search:
+    post:
+      tags: [Knowledge]
+      summary: 检索本班知识库
+      description: 结果范围从认证用户班级推导；客户端 class_id 不会扩大授权范围。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode, results]
+                properties:
+                  mode: { type: string, enum: [keyword, vector, hybrid] }
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/Source' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/knowledge/chunks/{chunk_id}:
+    parameters:
+      - name: chunk_id
+        in: path
+        required: true
+        description: 搜索结果中的稳定片段标识
+        schema: { type: string }
+    get:
+      tags: [Knowledge]
+      summary: 获取引用片段完整原文
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 当前班级当前版本的原文出处
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 片段不存在、过期或不属于当前班级 }
+  /api/knowledge/ask:
+    post:
+      tags: [Knowledge]
+      summary: 基于本班知识库进行单轮问答
+      description: |
+        先检索本班知识库并使用教师配置的解题引导技能调用 AI 网关。`claims` 只包含有本班引用支持的事实；
+        可选的通用补充会在答案中单独标记为“未经本班资料核验”，不会伪装成有引用的本班结论。
+        没有本班检索命中时，若网关能按技能生成通用引导，则返回空引用并明确标识；否则返回依据不足。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AskRequest' }
+      responses:
+        '200':
+          description: 已回答或证据不足
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AnsweredResponse'
+                  - $ref: '#/components/schemas/InsufficientResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/InvalidModelResponse' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/tutoring/config:
+    get:
+      tags: [Tutoring]
+      summary: 教师读取本班辅导配置
+      description: 仅教师可访问。配置以认证用户班级范围过滤。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 提示词与技能配置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TutoringConfig' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Tutoring]
+      summary: 更新本班教师提示词
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [teacher_prompt]
+              properties:
+                teacher_prompt: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: 更新后的配置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TutoringConfig' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/tutoring/skills:
+    get:
+      tags: [Tutoring]
+      summary: 教师列出本班技能
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 技能列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skills:
+                    type: array
+                    items: { $ref: '#/components/schemas/Skill' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Tutoring]
+      summary: 教师新增本班技能
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkillCreate' }
+      responses:
+        '201':
+          description: 已创建技能
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skill: { $ref: '#/components/schemas/Skill' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/tutoring/skills/{skill_id}:
+    parameters:
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    put:
+      tags: [Tutoring]
+      summary: 教师更新本班技能
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkillUpdate' }
+      responses:
+        '200':
+          description: 已更新技能
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skill: { $ref: '#/components/schemas/Skill' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 技能不存在或不属于当前教师班级 }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Tutoring]
+      summary: 教师删除本班技能
+      description: 不能删除本班最后一项启用的解题引导技能。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 技能不存在或不属于当前教师班级 }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/tutoring/sessions:
+    get:
+      tags: [Tutoring]
+      summary: 学生列出自己的会话
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 当前学生本人会话列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Tutoring]
+      summary: 学生新建私人会话
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                title: { type: string, minLength: 1, maxLength: 100, default: 新会话 }
+      responses:
+        '201':
+          description: 新建的会话
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/Session' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/tutoring/sessions/{session_id}:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [Tutoring]
+      summary: 学生读取自己的会话和消息
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 会话消息（按创建顺序）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 会话不存在或不属于当前学生/班级 }
+    delete:
+      tags: [Tutoring]
+      summary: 学生删除自己的会话
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 会话和消息已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 会话不存在或不属于当前学生/班级 }
+  /api/tutoring/sessions/{session_id}/messages:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      tags: [Tutoring]
+      summary: 学生发送问题并接收解题引导
+      description: |
+        只有学生本人可为自己的会话发送问题。回答先完成本班检索、证据/引用核验、班级及令牌复核，
+        随后持久化并以 Server-Sent Events 返回。浏览器中的 Swagger UI 可查看完整事件流。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TutoringMessageRequest' }
+      responses:
+        '200':
+          description: 证据不足时返回 JSON；回答通过校验时返回 SSE 事件流
+          content:
+            text/event-stream:
+              schema: { type: string, description: 'meta、delta、citations、done 事件' }
+              examples:
+                stream:
+                  value: |
+                    event: meta
+                    data: {"message_id":42,"status":"completed"}
+
+                    event: delta
+                    data: {"text":"试着先找出题目中的已知条件。"}
+
+                    event: citations
+                    data: {"items":[]}
+
+                    event: done
+                    data: {"message_id":42}
+            application/json:
+              schema: { $ref: '#/components/schemas/InsufficientResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: 会话不存在或不属于当前学生/班级 }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/InvalidModelResponse' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 在登录接口取得 access_token 后输入该 token（不加 Bearer 前缀）。
+  parameters:
+    MaterialId:
+      name: material_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+  responses:
+    BadRequest:
+      description: 请求 JSON、字段、格式、检索模式或长度不符合要求
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: 缺少、无效、过期或已撤销的 Bearer Token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: 身份角色不足或资源不属于当前授权范围
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: 资源冲突、会话正在处理，或违反必备技能规则
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InvalidModelResponse:
+      description: 模型响应格式或引用校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: 检索、模型或推理资源暂不可用
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: 请求参数无效 }
+    User:
+      type: object
+      required: [id, username, role, class_id, class_name]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        role: { type: string, enum: [teacher, student] }
+        class_id: { type: integer }
+        class_name: { type: string }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, example: a_student }
+        password: { type: string, format: password, example: a-student-password }
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, expires_in, user]
+      properties:
+        access_token: { type: string, description: JWT access token }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer, example: 3600 }
+        user: { $ref: '#/components/schemas/User' }
+    Material:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        filename: { type: string }
+        class_id: { type: integer }
+        search_index_status: { type: string, enum: [pending, indexed, failed] }
+        search_error: { type: string, nullable: true }
+    Location:
+      type: object
+      additionalProperties: true
+      properties:
+        page: { type: integer, nullable: true }
+        paragraph: { type: integer, nullable: true }
+        headings:
+          type: array
+          items: { type: string }
+        chunk: { type: integer, nullable: true }
+    Source:
+      type: object
+      required: [chunk_id, content_version, material_id, title, filename, excerpt, location, source_url, download_url]
+      properties:
+        chunk_id: { type: string }
+        content_version: { type: string }
+        material_id: { type: integer }
+        title: { type: string }
+        filename: { type: string }
+        excerpt: { type: string }
+        location: { $ref: '#/components/schemas/Location' }
+        source_url: { type: string }
+        download_url: { type: string }
+        rank: { type: integer }
+        number: { type: integer }
+    SearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 2000, example: 光合作用 }
+        mode: { type: string, enum: [keyword, vector, hybrid], default: hybrid }
+        limit: { type: integer, minimum: 1, maximum: 20, default: 5 }
+        class_id: { type: integer, description: 忽略客户端班级范围；授权只来自当前认证身份 }
+    AskRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question: { type: string, minLength: 1, maxLength: 2000, example: 植物如何通过光合作用制造养分？ }
+        mode: { type: string, enum: [keyword, vector, hybrid], default: hybrid }
+        class_id: { type: integer, description: 服务端忽略该值并使用当前认证班级 }
+    Citation:
+      allOf:
+        - $ref: '#/components/schemas/Source'
+        - type: object
+          required: [number]
+          properties:
+            number: { type: integer }
+    AnsweredResponse:
+      description: |
+        answer 包含有编号引用的本班材料引导；如果网关生成通用知识补充，它会单列并注明未经本班资料核验。
+      type: object
+      required: [status, answer, citations]
+      properties:
+        status: { type: string, enum: [answered] }
+        answer: { type: string }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+    InsufficientResponse:
+      type: object
+      required: [status, answer, citations]
+      properties:
+        status: { type: string, enum: [insufficient_evidence] }
+        answer: { type: string, example: 本班知识库暂无足够依据 }
+        citations:
+          type: array
+          maxItems: 0
+          items: { $ref: '#/components/schemas/Citation' }
+    Skill:
+      type: object
+      required: [id, name, kind, instructions, enabled]
+      properties:
+        id: { type: integer }
+        name: { type: string, maxLength: 80 }
+        kind: { type: string, enum: [solution_guidance, other] }
+        instructions: { type: string, maxLength: 2000 }
+        enabled: { type: integer, enum: [0, 1] }
+        updated_at: { type: string }
+    SkillCreate:
+      type: object
+      additionalProperties: false
+      required: [name, kind, instructions]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        kind: { type: string, enum: [solution_guidance, other] }
+        instructions: { type: string, minLength: 1, maxLength: 2000 }
+        enabled: { type: boolean, default: true }
+    SkillUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, kind, instructions, enabled]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        kind: { type: string, enum: [solution_guidance, other] }
+        instructions: { type: string, minLength: 1, maxLength: 2000 }
+        enabled: { type: boolean }
+    TutoringConfig:
+      type: object
+      required: [teacher_prompt, skills]
+      properties:
+        teacher_prompt: { type: string, maxLength: 4000 }
+        updated_at: { type: string }
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/Skill' }
+    Session:
+      type: object
+      required: [id, title, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+    SessionMessage:
+      type: object
+      required: [id, role, content, status, citations, created_at]
+      properties:
+        id: { type: integer }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        status: { type: string, enum: [pending, completed, failed] }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+        error_code: { type: string, nullable: true }
+        created_at: { type: string }
+    SessionDetail:
+      type: object
+      required: [session, messages]
+      properties:
+        session: { $ref: '#/components/schemas/Session' }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/SessionMessage' }
+    TutoringMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question: { type: string, minLength: 1, maxLength: 2000, example: 请给我一个解题提示，不要直接给出答案。 }
+        mode: { type: string, enum: [keyword, vector, hybrid], default: hybrid }

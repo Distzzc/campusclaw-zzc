@@ -1,0 +1,11 @@
+.git
+.venv
+.venv-knowledge
+node_modules
+data
+.env
+__pycache__
+.pytest_cache
+openspec
+.agents
+.codex

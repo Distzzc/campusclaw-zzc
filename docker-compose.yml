@@ -1,15 +1,59 @@
 services:
   app:
+    image: campusclaw-zzc-app
     build: .
+    env_file: .env
     environment:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       DATABASE_PATH: /app/data/app.db
       STORAGE_PATH: /app/data/materials
+      VECTOR_PATH: /app/data/vector-index
+      EMBEDDING_MODEL_PATH: /app/models/embedding
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-local-v1}
+      QA_MODEL_PATH: /app/models/qa
+      QA_PROVIDER: ${QA_PROVIDER:-auto}
+      QA_API_BASE_URL: ${QA_API_BASE_URL:-${EMBEDDING_BASE_URL:-}}
+      QA_API_KEY: ${QA_API_KEY:-${EMBEDDING_API_KEY:-}}
+      QA_API_MODEL: ${QA_API_MODEL:-course-chat}
+      QA_API_TIMEOUT: ${QA_API_TIMEOUT:-45}
+      QA_TIMEOUT: 120
+      INDEX_TIMEOUT: 120
+      QA_CONCURRENCY: 1
+      QA_CONTEXT_TOKENS: 4096
+      QA_MAX_NEW_TOKENS: 768
+      HF_HUB_OFFLINE: 1
+      TRANSFORMERS_OFFLINE: 1
+      KNOWLEDGE_ENABLED: ${KNOWLEDGE_ENABLED:-true}
+      TUTORING_ENABLED: ${TUTORING_ENABLED:-true}
+      TOOLS_ENABLED: ${TOOLS_ENABLED:-true}
+      TOOLS_CONFIG_PATH: /app/config/integrations.json
+      TOOLS_TIMEOUT: ${TOOLS_TIMEOUT:-10}
+      MCP_SERVER_ENABLED: ${MCP_SERVER_ENABLED:-true}
       FLASK_ENV: ${FLASK_ENV:-development}
     volumes:
       - app-data:/app/data
+      - ./config/integrations.json:/app/config/integrations.json:ro
+      - ./data/models:/app/models:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mcp-server:
+    image: campusclaw-zzc-app
+    build: .
+    command: ["python", "-m", "integrations.mcp_server"]
+    environment:
+      CAMPUSCLAW_API_URL: http://app:5000
+      MCP_SERVER_ENABLED: ${MCP_SERVER_ENABLED:-true}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*,mcp-server,mcp-server:*}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-http://localhost:*,http://127.0.0.1:*}
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -18,6 +62,8 @@ services:
     image: nginx:1.27-alpine
     depends_on:
       app:
+        condition: service_healthy
+      mcp-server:
         condition: service_healthy
     ports:
       - "${APP_PORT:-5000}:80"

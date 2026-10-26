@@ -3,3 +3,7 @@ data/
 __pycache__/
 .pytest_cache/
 .venv/
+
+.venv-knowledge/
+node_modules/
+apitest/reports/

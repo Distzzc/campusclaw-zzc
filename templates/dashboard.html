@@ -1,37 +1,27 @@
 {% extends "base.html" %}
-{% block title %}课堂材料 | CampusClaw{% endblock %}
+{% block title %}课堂空间 | CampusClaw{% endblock %}
 {% block content %}
 <div class="app-layout" data-dashboard hidden>
-  <header class="topbar">
-    <a class="wordmark" href="{{ url_for('materials_page') }}"><span>CC</span> CampusClaw</a>
-    <div class="topbar-actions">
-      <div class="identity-chip">
-        <span class="avatar" data-user-avatar></span>
-        <span><strong data-user-name></strong><small><span data-user-role></span> · <span data-class-name></span></small></span>
-      </div>
-      <button class="button button-ghost" type="button" data-logout>退出</button>
-    </div>
-  </header>
-
-  <div class="dashboard-grid">
-    <aside class="side-panel">
-      <p class="eyebrow">YOUR CLASSROOM</p>
-      <h1 data-class-heading></h1>
-      <p class="side-copy">这里是你的课堂材料空间。内容只对本班成员开放。</p>
-      <div class="side-status"><span class="status-dot"></span>空间已连接</div>
-    </aside>
-
-    <section class="content-panel" aria-labelledby="page-heading">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">KNOWLEDGE BASE</p>
-          <h2 id="page-heading">班级材料</h2>
-        </div>
-        <span class="count-badge" data-material-count>加载中</span>
-      </div>
-
+  <aside class="app-sidebar" aria-label="课堂导航">
+    <a class="wordmark" href="{{ url_for('materials_page') }}"><span aria-hidden="true">✳</span>CampusClaw</a>
+    <div class="class-card"><span class="class-icon" aria-hidden="true">▦</span><div><strong data-class-heading></strong><small data-space-label>课堂空间</small></div><span class="status-dot" title="空间已连接"></span></div>
+    <p class="nav-label">工作空间</p>
+    <nav class="workspace-nav" aria-label="功能页面">
+      {% if config.TUTORING_ENABLED %}<button type="button" class="nav-item" data-nav="chat" data-nav-role="student" aria-controls="view-chat" hidden><span aria-hidden="true">✧</span>解题引导</button>{% endif %}
+      <button type="button" class="nav-item" data-nav="materials" aria-controls="view-materials"><span aria-hidden="true">▤</span>班级材料</button>
+      {% if config.KNOWLEDGE_ENABLED %}<button type="button" class="nav-item" data-nav="knowledge" aria-controls="view-knowledge"><span aria-hidden="true">⌕</span>知识检索</button>{% endif %}
+      {% if config.TUTORING_ENABLED %}<button type="button" class="nav-item" data-nav="settings" data-nav-role="teacher" aria-controls="view-settings" hidden><span aria-hidden="true">☷</span>辅导配置</button>{% endif %}
+      {% if config.TOOLS_ENABLED %}<button type="button" class="nav-item" data-nav="integrations" data-nav-role="teacher" aria-controls="view-integrations" hidden><span aria-hidden="true">⌘</span>工具与 MCP</button>{% endif %}
+    </nav>
+    {% if config.TUTORING_ENABLED %}<div class="sidebar-history" data-history hidden><p class="nav-label">最近对话 <span>仅自己可见</span></p><nav data-session-list class="session-list" aria-label="我的会话"></nav></div>{% endif %}
+    <div class="sidebar-bottom"><div class="space-tip"><span aria-hidden="true">◈</span><p>知识在这里连接<br><small>专属于本班的学习空间</small></p></div><div class="identity-chip"><span class="avatar" data-user-avatar></span><div><strong data-user-name></strong><small><span data-user-role></span> · <span data-class-name></span></small></div><button class="logout-button" type="button" data-logout aria-label="退出登录" title="退出登录">↪</button></div></div>
+  </aside>
+  <div class="workspace-shell">
+    <header class="topbar"><div class="breadcrumb"><span data-workspace-label>课堂空间</span><span aria-hidden="true">/</span><strong data-page-title>班级材料</strong></div><span class="topbar-status"><span class="status-dot"></span>本班专属空间</span></header>
+    <div class="content-panel">
       <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
-
+      <section class="workspace-view materials-view" id="view-materials" data-view="materials" tabindex="-1" aria-labelledby="page-heading" hidden>
+        <div class="section-heading"><div><p class="eyebrow">CLASSROOM LIBRARY</p><h2 id="page-heading">让知识，有处可寻</h2><p class="muted">课堂材料集中在这里，随时回顾每一个知识点。</p></div><span class="count-badge" data-material-count>加载中</span></div>
       <section class="upload-panel" aria-labelledby="upload-heading" data-teacher-only hidden>
         <div>
           <p class="eyebrow">TEACHER TOOL</p>
@@ -56,12 +46,111 @@
       </section>
 
       <section class="materials-section" aria-labelledby="list-heading">
-        <div class="list-heading"><h3 id="list-heading">最近材料</h3><button class="button button-small button-ghost" type="button" data-refresh>刷新列表</button></div>
+        <div class="list-heading"><h3 id="list-heading">全部材料</h3><button class="button button-small button-ghost" type="button" data-refresh>刷新列表</button></div>
         <div class="material-list" data-material-list aria-live="polite">
           <div class="loading-state"><span class="spinner"></span>正在加载本班材料</div>
         </div>
       </section>
-    </section>
+
+      </section>
+      {% if config.KNOWLEDGE_ENABLED %}
+      <section class="knowledge-panel workspace-view" id="view-knowledge" data-view="knowledge" hidden tabindex="-1" aria-labelledby="knowledge-heading">
+        <div class="view-intro"><span class="feature-symbol" aria-hidden="true">⌕</span><p class="eyebrow">CLASS KNOWLEDGE</p><h2 id="knowledge-heading">从课堂材料中，找到答案</h2></div>
+        <p class="muted">查找本班材料，或依据材料回答问题。每条来源都可以查看原文。</p>
+        <form data-knowledge-form class="stack-form">
+          <div class="field">
+            <label for="knowledge-query">关键词或问题</label>
+            <textarea id="knowledge-query" name="query" maxlength="2000" rows="3" required placeholder="例如：植物如何通过光合作用制造养分？"></textarea>
+          </div>
+          <div class="knowledge-actions">
+            <label for="knowledge-mode">检索方式</label>
+            <select id="knowledge-mode" name="mode">
+              <option value="hybrid">混合检索</option>
+              <option value="keyword">关键字检索</option>
+              <option value="vector">语义检索</option>
+            </select>
+            <button class="button button-small" type="submit" value="search">检索材料</button>
+            <button class="button button-primary" type="submit" value="ask">根据材料回答</button>
+          </div>
+        </form>
+        <p data-knowledge-status role="status" aria-live="polite"></p>
+        <div data-knowledge-results></div>
+      </section>
+      {% endif %}
+
+
+      {% if config.TOOLS_ENABLED %}
+      <section class="workspace-view integrations-panel" id="view-integrations" data-view="integrations" hidden tabindex="-1" aria-labelledby="integrations-heading">
+        <p class="eyebrow">CONNECTED CLASSROOM</p>
+        <h2 id="integrations-heading">连接更多学习能力</h2>
+        <p class="muted">选择本班 AI 可以使用的只读工具。外部服务由管理员配置，启用后 AI 可按需向服务发送工具参数。</p>
+        <div class="integration-info"><strong>本班工具</strong><button class="button button-small button-ghost" type="button" data-refresh-tools>刷新连接</button></div>
+        <p data-integrations-status role="status" aria-live="polite"></p>
+        <form data-integrations-form class="stack-form">
+          <div data-tools-list class="tools-grid"></div>
+          <button class="button button-primary" type="submit" data-save-tools disabled>保存本班工具</button>
+        </form>
+        <section class="mcp-access-card" aria-labelledby="mcp-access-heading">
+          <span class="eyebrow">MCP ACCESS</span>
+          <h3 id="mcp-access-heading">让外部 AI 连接课堂知识库</h3>
+          <p class="muted">支持 Streamable HTTP。外部客户端需携带登录接口返回的 Bearer 令牌，访问范围与该账号的班级权限一致。</p>
+          <div class="field"><label for="mcp-endpoint">本项目 MCP 地址</label><input id="mcp-endpoint" data-mcp-endpoint readonly value="加载中"></div>
+          <p class="form-hint">提供班级信息、材料列表、知识检索和引用原文四项只读工具。令牌过期后需重新登录获取。</p>
+        </section>
+      </section>
+      {% endif %}
+
+      {% if config.TUTORING_ENABLED %}
+      <section class="tutoring-panel workspace-view" id="view-settings" data-view="settings" tabindex="-1" data-tutoring-teacher hidden aria-labelledby="teacher-tutoring-heading">
+        <p class="eyebrow">TEACHER COACHING</p>
+        <h2 id="teacher-tutoring-heading">让辅导更贴合你的课堂</h2>
+        <p class="muted">配置本班辅导方式。每个班级必须保留至少一项启用的「解题引导」技能。</p>
+        <form data-tutoring-prompt-form class="stack-form">
+          <div class="field">
+            <label for="tutoring-prompt">本班辅导提示词</label>
+            <textarea id="tutoring-prompt" name="teacher_prompt" maxlength="4000" rows="4" placeholder="例如：先询问学生已经尝试了什么。"></textarea>
+          </div>
+          <button class="button button-primary" type="submit">保存提示词</button>
+          <p data-tutoring-config-status role="status" aria-live="polite"></p>
+        </form>
+        <div class="tutoring-skill-heading"><h4>技能</h4><button class="button button-small button-ghost" type="button" data-new-skill>新增技能</button></div>
+        <div data-tutoring-skills class="tutoring-skills"></div>
+      </section>
+
+      <section class="tutoring-panel workspace-view" id="view-chat" data-view="chat" tabindex="-1" data-tutoring-student hidden aria-labelledby="student-tutoring-heading">
+        <div class="tutoring-title-row">
+          <div><h2 id="student-tutoring-heading">解题引导</h2><p class="muted">每一次思考，都离答案更近一步。</p></div>
+          <button class="button button-primary" type="button" data-create-session>新建会话</button>
+        </div>
+        <p data-tutoring-status role="status" aria-live="polite"></p>
+        <div class="tutoring-layout">
+            <div class="tutoring-conversation">
+            <div class="chat-welcome" data-chat-welcome>
+              <span class="welcome-mark" aria-hidden="true">✳</span>
+              <p class="eyebrow">YOUR LEARNING COMPANION</p>
+              <h3>今天，想一起弄懂什么？</h3>
+              <p>带上你的问题，或说说卡住的那一步。<br>我们从课堂知识出发，一步步理清思路。</p>
+              <div class="welcome-topics" aria-label="辅导特点"><span>梳理解题思路</span><span>理解课堂知识</span><span>核验材料出处</span></div>
+              <p class="welcome-hint">点击「新建会话」，开始这一次探索</p>
+            </div>
+            <div data-session-messages class="session-messages" aria-live="polite"></div>
+            <form data-tutoring-question-form class="stack-form chat-composer" hidden>
+              <label class="field" for="tutoring-question">你的问题
+                <textarea id="tutoring-question" name="question" maxlength="2000" rows="3" required placeholder="写下你的问题，或告诉我你卡在了哪一步…"></textarea>
+              </label>
+              <div class="knowledge-actions">
+                <label for="tutoring-mode">检索方式</label>
+                <select id="tutoring-mode" name="mode"><option value="hybrid">混合检索</option><option value="keyword">关键字检索</option><option value="vector">语义检索</option></select>
+                <button class="button button-primary" type="submit" data-send-question>提问并获取提示</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      {% endif %}
+    </div>
+    <footer class="workspace-footer">CampusClaw <span>·</span> 让每一次学习，都有所收获</footer>
   </div>
 </div>
 {% endblock %}
